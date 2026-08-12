@@ -7,18 +7,41 @@ come in. One Go binary, one Postgres database, no frontend build step.
 
 ```bash
 docker compose up -d
-go run ./cmd/server
 ```
 
-Then open `http://localhost:8080/`.
+Then open `http://localhost:8080/`. That's the whole setup — no Go toolchain, no `npm install`,
+nothing else to install. `docker compose` builds the server image from the repo's `Dockerfile`
+(multi-stage: compiled in a `golang:1.26-alpine` stage, run from a minimal `alpine:3.20` image)
+and starts it alongside Postgres, in dependency order — the app container waits for Postgres's
+healthcheck before it starts.
 
-- `docker compose up -d` starts Postgres on `localhost:5432` (user/pass/db: `poll`/`poll`/`poll_tergeist`).
-- `go run ./cmd/server` connects to it, applies the embedded schema, and serves on `:8080`.
-- Override either with env vars: `DATABASE_URL` (a full Postgres connection string) and `ADDR`
-  (e.g. `:8090` if `8080` is taken).
+Docker builds natively for whatever machine it's running on — Apple Silicon, Intel, or a Linux
+x86/ARM host all get a correctly-arched image from the same `Dockerfile`, no cross-compilation
+flags needed for local use. Windows works the same way through Docker Desktop, which always runs
+Linux containers regardless of host CPU. The `TARGETOS`/`TARGETARCH` build args in the `Dockerfile`
+also make this resolvable as a genuine multi-platform image via `docker buildx build --platform
+linux/amd64,linux/arm64`, if it's ever published to a registry — not needed for local use, since
+each machine already builds its own native image.
+
+If port `8080` is already taken locally, override it without editing anything:
+`APP_PORT=8091 docker compose up -d`. The Postgres port is fixed at `5432` — the test suite
+(below) expects to find it there.
 
 No separate build or install step for the frontend — the three HTML pages and their shared
 `app.js` are embedded into the binary and served directly.
+
+### Local development
+
+Iterating on the Go code without rebuilding the image each time still needs the Go toolchain:
+
+```bash
+docker compose up -d db
+go run ./cmd/server
+```
+
+This runs the server on the host, connecting to the same dockerized Postgres. Override with env
+vars: `DATABASE_URL` (a full Postgres connection string) and `ADDR` (e.g. `:8090` if `8080` is
+taken locally by something else).
 
 ## Domain glossary
 

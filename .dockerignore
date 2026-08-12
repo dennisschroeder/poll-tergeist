@@ -1,0 +1,17 @@
+# Never send these into the build context — private, gitignored planning docs.
+plan.md
+decision-log.md
+NOTES-private.md
+docs/challenge-brief.md
+
+.git/
+.gitignore
+
+# Build output / local dev
+/poll-tergeist
+/bin/
+*.exe
+
+.DS_Store
+.idea/
+.vscode/
