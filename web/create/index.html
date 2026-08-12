@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>poll-tergeist — create a poll</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 32rem;
+    margin: 3rem auto;
+    padding: 0 1rem;
+    line-height: 1.4;
+  }
+  h1 { font-size: 1.4rem; }
+  label { display: block; font-weight: 600; margin-top: 1rem; }
+  input[type="text"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.5rem;
+    font-size: 1rem;
+    margin-top: 0.25rem;
+  }
+  .option-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-top: 0.5rem;
+  }
+  .option-row input { flex: 1; }
+  .option-row button {
+    flex-shrink: 0;
+    padding: 0.4rem 0.6rem;
+    cursor: pointer;
+  }
+  .hint { font-size: 0.85rem; opacity: 0.7; margin-top: 0.25rem; }
+  #add-option {
+    margin-top: 0.75rem;
+    padding: 0.4rem 0.8rem;
+    cursor: pointer;
+  }
+  #submit {
+    margin-top: 1.5rem;
+    padding: 0.6rem 1.2rem;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  #error {
+    color: #c0392b;
+    margin-top: 1rem;
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <h1>Create a poll</h1>
+  <form id="create-form" novalidate>
+    <label for="question">Question</label>
+    <input type="text" id="question" name="question" maxlength="280" required>
+    <div class="hint"><span id="question-count">0</span>/280</div>
+
+    <label>Options (2–5)</label>
+    <div id="options"></div>
+    <button type="button" id="add-option">+ add option</button>
+
+    <div>
+      <button type="submit" id="submit">Create poll</button>
+    </div>
+
+    <div id="error" role="alert"></div>
+  </form>
+
+  <script src="/app.js"></script>
+  <script>
+    const MIN_OPTIONS = 2;
+    const MAX_OPTIONS = 5;
+
+    const optionsContainer = document.getElementById('options');
+    const addOptionBtn = document.getElementById('add-option');
+    const form = document.getElementById('create-form');
+    const errorEl = document.getElementById('error');
+    const questionInput = document.getElementById('question');
+    const questionCount = document.getElementById('question-count');
+
+    function makeOptionRow() {
+      const row = document.createElement('div');
+      row.className = 'option-row';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = 120;
+      input.placeholder = 'Option label';
+      input.required = true;
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = 'remove';
+      removeBtn.addEventListener('click', () => {
+        row.remove();
+        updateControls();
+      });
+
+      row.appendChild(input);
+      row.appendChild(removeBtn);
+      return row;
+    }
+
+    function updateControls() {
+      const rows = optionsContainer.querySelectorAll('.option-row');
+      const removeButtons = optionsContainer.querySelectorAll('.option-row button');
+      removeButtons.forEach((btn) => {
+        btn.disabled = rows.length <= MIN_OPTIONS;
+      });
+      addOptionBtn.disabled = rows.length >= MAX_OPTIONS;
+    }
+
+    addOptionBtn.addEventListener('click', () => {
+      if (optionsContainer.querySelectorAll('.option-row').length >= MAX_OPTIONS) return;
+      optionsContainer.appendChild(makeOptionRow());
+      updateControls();
+    });
+
+    questionInput.addEventListener('input', () => {
+      questionCount.textContent = String(questionInput.value.length);
+    });
+
+    // Start with the minimum number of options.
+    for (let i = 0; i < MIN_OPTIONS; i++) {
+      optionsContainer.appendChild(makeOptionRow());
+    }
+    updateControls();
+
+    function showError(message) {
+      errorEl.textContent = message;
+      errorEl.style.display = 'block';
+    }
+
+    function hideError() {
+      errorEl.style.display = 'none';
+      errorEl.textContent = '';
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      hideError();
+
+      const question = questionInput.value.trim();
+      const options = Array.from(optionsContainer.querySelectorAll('.option-row input'))
+        .map((input) => input.value.trim())
+        .filter((label) => label.length > 0);
+
+      if (!question) {
+        showError('Please enter a question.');
+        return;
+      }
+      if (options.length < MIN_OPTIONS || options.length > MAX_OPTIONS) {
+        showError(`Please provide between ${MIN_OPTIONS} and ${MAX_OPTIONS} options.`);
+        return;
+      }
+
+      const submitBtn = document.getElementById('submit');
+      submitBtn.disabled = true;
+      try {
+        const poll = await createPoll(question, options);
+        window.location.href = `/p/${encodeURIComponent(poll.id)}`;
+      } catch (err) {
+        showError(err.message);
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

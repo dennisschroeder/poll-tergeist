@@ -1,0 +1,18 @@
+# Planning + brief — never published. This repo is public.
+plan.md
+NOTES-private.md
+docs/challenge-brief.md
+
+# Build output
+/poll-tergeist
+/bin/
+*.exe
+
+# Local env
+.env
+.env.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

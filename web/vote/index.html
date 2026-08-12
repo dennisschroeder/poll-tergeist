@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>poll-tergeist — vote</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 32rem;
+    margin: 3rem auto;
+    padding: 0 1rem;
+    line-height: 1.4;
+  }
+  h1 { font-size: 1.4rem; }
+  #options { margin-top: 1.5rem; display: flex; flex-direction: column; gap: 0.6rem; }
+  .option-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+    cursor: pointer;
+    border: 1px solid currentColor;
+    background: transparent;
+    border-radius: 0.4rem;
+  }
+  .option-btn:hover { opacity: 0.8; }
+  .option-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+  #error {
+    color: #c0392b;
+    margin-top: 1rem;
+    display: none;
+  }
+  #status { opacity: 0.7; margin-top: 1rem; }
+</style>
+</head>
+<body>
+  <h1 id="question">Loading…</h1>
+  <div id="status"></div>
+  <div id="options"></div>
+  <div id="error" role="alert"></div>
+
+  <script src="/app.js"></script>
+  <script>
+    const { id } = pollIdFromPath();
+    const questionEl = document.getElementById('question');
+    const optionsEl = document.getElementById('options');
+    const errorEl = document.getElementById('error');
+    const statusEl = document.getElementById('status');
+
+    function showError(message) {
+      errorEl.textContent = message;
+      errorEl.style.display = 'block';
+    }
+
+    async function init() {
+      if (!id) {
+        showError('No poll id in the URL.');
+        return;
+      }
+
+      let poll;
+      try {
+        poll = await fetchPoll(id);
+      } catch (err) {
+        questionEl.textContent = 'Poll unavailable';
+        showError(err.message);
+        return;
+      }
+
+      questionEl.textContent = poll.question;
+
+      poll.options
+        .slice()
+        .sort((a, b) => a.position - b.position)
+        .forEach((option) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'option-btn';
+          btn.textContent = option.label;
+          btn.addEventListener('click', () => vote(option.id));
+          optionsEl.appendChild(btn);
+        });
+    }
+
+    async function vote(optionId) {
+      errorEl.style.display = 'none';
+      const buttons = optionsEl.querySelectorAll('button');
+      buttons.forEach((b) => (b.disabled = true));
+      statusEl.textContent = 'Submitting your vote…';
+
+      try {
+        await submitVote(id, optionId);
+        window.location.href = `/p/${encodeURIComponent(id)}/results`;
+      } catch (err) {
+        statusEl.textContent = '';
+        buttons.forEach((b) => (b.disabled = false));
+        showError(err.message);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
