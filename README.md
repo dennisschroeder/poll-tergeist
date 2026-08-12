@@ -106,9 +106,11 @@ channels, and a vote publishes the new tally to all of them. Publish is a **non-
 voter whose request triggered the publish. That's the backpressure story.
 
 The hub is per-process, which is the honest limitation: it doesn't fan out across a second
-instance. See [`docs/adr/0002-sse-in-process-hub.md`](docs/adr/0002-sse-in-process-hub.md) for why
-that's the right trade-off here, and what would replace it (Postgres `LISTEN/NOTIFY`) if this had
-to run behind more than one process.
+instance. See [`docs/adr/0003-tally-fan-out-and-queue-design.md`](docs/adr/0003-tally-fan-out-and-queue-design.md)
+for why that's the right trade-off here, and what would replace it (Postgres `LISTEN/NOTIFY`) if
+this had to run behind more than one process. The choice of SSE as the transport itself is a
+separate decision — see
+[`docs/adr/0002-sse-transport.md`](docs/adr/0002-sse-transport.md).
 
 ## Trade-offs and known gaps
 
@@ -120,10 +122,10 @@ to run behind more than one process.
   deliberate, disclosed limitation, not an oversight.
 - **Single-instance live updates.** The SSE hub lives in one process's memory. Horizontal scaling
   needs a shared fan-out layer (Postgres `LISTEN/NOTIFY` is the next step, Redis pub/sub beyond
-  that) — not implemented, named explicitly in ADR 0002.
+  that) — not implemented, named explicitly in ADR 0003.
 - **No deploy.** `docker compose up` is the full runnable answer here; no hosting account or CLI
   was in the critical path to a submission deadline. See
-  [`docs/adr/0003-go-stdlib-no-build-frontend.md`](docs/adr/0003-go-stdlib-no-build-frontend.md)
+  [`docs/adr/0004-go-stdlib-no-build-frontend.md`](docs/adr/0004-go-stdlib-no-build-frontend.md)
   for the related frontend-stack reasoning.
 - **No poll closing/expiry, no results-only mode, no edit-after-create.** Out of scope for the
   domain as modeled; see the glossary above.
