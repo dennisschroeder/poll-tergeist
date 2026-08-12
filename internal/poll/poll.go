@@ -17,8 +17,9 @@ const (
 	MaxQuestionLen = 280
 	MaxLabelLen    = 120
 
-	idAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-	idLen      = 10
+	idAlphabet    = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	idLen         = 10
+	voterTokenLen = 32
 )
 
 type Poll struct {
@@ -51,21 +52,18 @@ type Tally struct {
 
 // NewID returns a 10-char base62 poll ID, e.g. "aZ3kP9mQ2x".
 func NewID() (string, error) {
-	b := make([]byte, idLen)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("poll: generate id: %w", err)
-	}
-	for i, v := range b {
-		b[i] = idAlphabet[int(v)%len(idAlphabet)]
-	}
-	return string(b), nil
+	return randomBase62(idLen, "generate id")
 }
 
 // NewVoterToken returns a 32-char base62 opaque token for the voter cookie.
 func NewVoterToken() (string, error) {
-	b := make([]byte, 32)
+	return randomBase62(voterTokenLen, "generate voter token")
+}
+
+func randomBase62(n int, errContext string) (string, error) {
+	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("poll: generate voter token: %w", err)
+		return "", fmt.Errorf("poll: %s: %w", errContext, err)
 	}
 	for i, v := range b {
 		b[i] = idAlphabet[int(v)%len(idAlphabet)]

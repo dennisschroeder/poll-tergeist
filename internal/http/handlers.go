@@ -36,17 +36,23 @@ func toPollJSON(p poll.Poll, tally poll.Tally) pollJSON {
 	for i, o := range p.Options {
 		options[i] = optionJSON{ID: o.ID, Position: o.Position, Label: o.Label}
 	}
-	counts := make(map[string]int64, len(tally.Counts))
-	for id, c := range tally.Counts {
-		counts[fmt.Sprintf("%d", id)] = int64(c)
-	}
 	return pollJSON{
 		ID:        p.ID,
 		Question:  p.Question,
 		CreatedAt: p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		Options:   options,
-		Tally:     counts,
+		Tally:     tallyJSON(tally),
 	}
+}
+
+// tallyJSON flattens a Tally's int64 option IDs to string keys, since Go's
+// encoding/json requires string map keys.
+func tallyJSON(t poll.Tally) map[string]int64 {
+	counts := make(map[string]int64, len(t.Counts))
+	for id, c := range t.Counts {
+		counts[fmt.Sprintf("%d", id)] = int64(c)
+	}
+	return counts
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -156,11 +162,7 @@ func (a *api) vote(w http.ResponseWriter, r *http.Request) {
 }
 
 func tallyResponse(t poll.Tally) map[string]any {
-	counts := make(map[string]int64, len(t.Counts))
-	for id, c := range t.Counts {
-		counts[fmt.Sprintf("%d", id)] = int64(c)
-	}
-	return map[string]any{"tally": counts}
+	return map[string]any{"tally": tallyJSON(t)}
 }
 
 func withError(m map[string]any, msg string) map[string]any {
@@ -169,11 +171,7 @@ func withError(m map[string]any, msg string) map[string]any {
 }
 
 func (a *api) publishTally(pollID string, t poll.Tally) {
-	counts := make(map[string]int64, len(t.Counts))
-	for id, c := range t.Counts {
-		counts[fmt.Sprintf("%d", id)] = int64(c)
-	}
-	payload, err := json.Marshal(counts)
+	payload, err := json.Marshal(tallyJSON(t))
 	if err != nil {
 		return
 	}

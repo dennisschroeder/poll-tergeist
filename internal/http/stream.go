@@ -2,7 +2,6 @@ package http
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 )
 
@@ -29,11 +28,7 @@ func (a *api) stream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	counts := make(map[string]int64, len(tally.Counts))
-	for optID, c := range tally.Counts {
-		counts[fmt.Sprintf("%d", optID)] = int64(c)
-	}
-	if !writeSSEFrame(w, counts) {
+	if !writeSSEFrame(w, tallyJSON(tally)) {
 		return
 	}
 	flusher.Flush()
