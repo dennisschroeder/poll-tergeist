@@ -216,10 +216,13 @@ of those solves a different problem, justified by a different requirement, not b
 
 - **Postgres `LISTEN/NOTIFY`** — simple cross-instance invalidation, as long as Postgres remains
   authoritative and the message stays "something changed." The default next step.
-- **Redis Pub/Sub** — worth considering if `LISTEN/NOTIFY`'s per-instance connection cost or
-  payload ceiling (~8000 bytes) becomes the actual bottleneck under measurement, or if operational
-  scale otherwise justifies it. Still fire-and-forget, at-most-once — it widens fan-out; it doesn't
-  add a delivery guarantee `LISTEN/NOTIFY` lacks.
+- **Redis Pub/Sub** — worth considering if `LISTEN/NOTIFY` itself becomes the bottleneck under
+  measurement: notification throughput or DB signaling load, per-instance connection/topology
+  constraints, or an operational requirement to decouple fan-out from Postgres entirely. Not
+  `NOTIFY`'s ~8000-byte payload ceiling — under this ADR's invalidation-not-data model the payload
+  is always just an ID or "something changed," so that limit should never become material here.
+  Still fire-and-forget, at-most-once — Redis widens fan-out; it doesn't add a delivery guarantee
+  `LISTEN/NOTIFY` lacks.
 - **A durable broker** (Kafka, RabbitMQ, NATS JetStream, Google Pub/Sub, …) — justified when
   individual *events* (not just "something changed") need durable delivery, replay, independent
   consumers, stronger delivery semantics, analytics/event processing, or decoupling at a larger
