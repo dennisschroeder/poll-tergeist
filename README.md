@@ -346,7 +346,9 @@ This project was built with AI assistance (Claude, via Claude Code) from a hand-
 fixed every architectural decision — stack, schema, API surface, ADR structure — before any code
 was generated. AI wrote the bulk of the Go and the three frontend pages against that frozen plan;
 a human reviewed the diff, fixed the parts described below, and drove every ADR through explicit
-review rather than accepting a first draft.
+review rather than accepting a first draft. The full workflow — including the execution graph
+and where the process actually broke and self-corrected — is in
+[`docs/ai-workflow.md`](docs/ai-workflow.md).
 
 What AI generated largely as specified: the domain package, the Postgres repository layer, the SSE
 hub, HTTP handlers and routing, the three static views, and the test suite structure (concurrency
