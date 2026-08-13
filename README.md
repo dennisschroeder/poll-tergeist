@@ -1,7 +1,7 @@
 # poll-tergeist
 
-A live voting/poll app: create a poll, share the link, watch results update in real time as votes
-come in. One Go binary, one Postgres database, no frontend build step.
+A spookily awesome live voting/poll app: create a poll, share the link, watch results update in real time as votes
+come in. One Go binary, one Postgres database, no frontend build step. 
 
 ## Quick start
 
