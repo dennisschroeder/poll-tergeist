@@ -150,7 +150,12 @@ func (a *api) vote(w http.ResponseWriter, r *http.Request) {
 	tally, err := a.store.InsertVote(r.Context(), id, req.OptionID, voterToken)
 	switch {
 	case err == nil:
-		a.publishTally(id, tally)
+		// The tally in this response is the command's own read; it is not
+		// what live subscribers receive. Invalidate carries no payload —
+		// the SSE path re-reads current state from Postgres independently,
+		// so it never depends on this or any other concurrent handler's
+		// InsertVote result being observed in commit order.
+		a.hub.Invalidate(id)
 		writeJSON(w, http.StatusCreated, tallyResponse(tally))
 	case errors.Is(err, store.ErrAlreadyVoted):
 		writeJSON(w, http.StatusConflict, withError(tallyResponse(tally), "already voted"))
@@ -168,12 +173,4 @@ func tallyResponse(t poll.Tally) map[string]any {
 func withError(m map[string]any, msg string) map[string]any {
 	m["error"] = msg
 	return m
-}
-
-func (a *api) publishTally(pollID string, t poll.Tally) {
-	payload, err := json.Marshal(tallyJSON(t))
-	if err != nil {
-		return
-	}
-	a.hub.Publish(pollID, payload)
 }
