@@ -201,6 +201,16 @@ authoritative, and a `NOTIFY` payload only ever needs to mean "state changed" �
 invalidation-not-data semantics this ADR already settled on, just carried across processes instead
 of staying within one. No new service to run.
 
+One detail that matters for correctness, not just style: the `NOTIFY` must be issued from inside
+the same transaction as the vote insert (or from a trigger on the `votes` table, which runs inside
+that transaction by construction) — not as a separate step after the transaction commits. Postgres
+only delivers a `NOTIFY` if the transaction that issued it actually commits; issuing it
+post-commit, as a second, independent action, reopens exactly the failure mode this ADR exists to
+close — a process crash between "vote committed" and "NOTIFY sent" would silently drop the
+invalidation for every other instance, with no later trigger to recover it. Transactional `NOTIFY`
+gives this evolution path the same "a committed vote always produces an invalidation" guarantee the
+in-process hub already has.
+
 Running multiple instances does not, by itself, mean Redis, Kafka, or NATS becomes required. Each
 of those solves a different problem, justified by a different requirement, not by instance count:
 

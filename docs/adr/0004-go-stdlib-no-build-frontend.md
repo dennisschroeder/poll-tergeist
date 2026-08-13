@@ -44,9 +44,12 @@ through in detail.
 
 ### Option D — Go + templ/HTMX (server-rendered)
 **Pro:**
-- The SSE hub forwards opaque bytes regardless of payload, so htmx's SSE extension could subscribe
-  to the same `/stream` endpoint and swap in a rendered fragment per vote — no client-side JS
-  needed to parse a tally and recompute bar widths by hand.
+- The hub itself carries no payload — it only ever signals "this poll changed" (see
+  [ADR 0003](0003-tally-fan-out-and-queue-design.md)); the SSE handler is the sole place that reads
+  Postgres and formats each frame. A htmx-flavored variant would only need to change what that one
+  handler renders on invalidation — a rendered HTML fragment instead of a JSON tally — without
+  touching the hub. No client-side JS would be needed to parse a tally and recompute bar widths by
+  hand.
 - One representation of "what a tally row looks like" instead of three (a Go struct, its JSON
   encoding, and hand-written JS rendering logic) kept in sync, as the current results page does.
 

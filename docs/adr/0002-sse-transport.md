@@ -12,7 +12,7 @@ sub-second/hard-real-time; and the client side should stay simple, ideally using
 already provides rather than a hand-rolled reconnect/keepalive protocol.
 
 This decision is just the wire protocol between server and browser: how a tally change gets from
-the server to a viewer already looking at the results page. How that change is queued and fanned
+the server to a viewer already looking at the results page. How that change is signaled and fanned
 out — within one process and across more than one — is a separate, orthogonal decision; see
 [ADR 0003](0003-tally-fan-out-and-queue-design.md).
 
