@@ -147,23 +147,34 @@ func (a *api) vote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	voterToken := voterTokenFrom(r)
-	tally, err := a.store.InsertVote(r.Context(), id, req.OptionID, voterToken)
+	err := a.store.InsertVote(r.Context(), id, req.OptionID, voterToken)
 	switch {
 	case err == nil:
-		// The tally in this response is the command's own read; it is not
-		// what live subscribers receive. Invalidate carries no payload —
-		// the SSE path re-reads current state from Postgres independently,
-		// so it never depends on this or any other concurrent handler's
-		// InsertVote result being observed in commit order.
+		// The vote is already durably committed at this point — invalidate
+		// immediately, before anything else that could fail. A committed
+		// vote must always produce an invalidation; it must never be
+		// skipped because a later, unrelated read (the tally below) failed.
 		a.hub.Invalidate(id)
-		writeJSON(w, http.StatusCreated, tallyResponse(tally))
+		writeJSON(w, http.StatusCreated, tallyResponse(a.currentTally(r, id)))
 	case errors.Is(err, store.ErrAlreadyVoted):
-		writeJSON(w, http.StatusConflict, withError(tallyResponse(tally), "already voted"))
+		writeJSON(w, http.StatusConflict, withError(tallyResponse(a.currentTally(r, id)), "already voted"))
 	case errors.Is(err, store.ErrOptionNotFound):
 		writeError(w, http.StatusBadRequest, "option does not belong to this poll")
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to record vote")
 	}
+}
+
+// currentTally is a best-effort read for the command response body only —
+// independent of both vote persistence and live invalidation (see vote
+// above). A failure here must not change the vote's outcome or status
+// code, so it falls back to an empty tally rather than erroring.
+func (a *api) currentTally(r *http.Request, pollID string) poll.Tally {
+	tally, err := a.store.GetTally(r.Context(), pollID)
+	if err != nil {
+		return poll.Tally{PollID: pollID, Counts: map[int64]int{}}
+	}
+	return tally
 }
 
 func tallyResponse(t poll.Tally) map[string]any {

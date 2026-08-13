@@ -51,7 +51,7 @@ func TestConcurrentDistinctVoters(t *testing.T) {
 			defer wg.Done()
 			token := fmt.Sprintf("voter-%d", i)
 			optionID := p.Options[i%2].ID
-			if _, err := s.InsertVote(context.Background(), p.ID, optionID, token); err != nil {
+			if err := s.InsertVote(context.Background(), p.ID, optionID, token); err != nil {
 				t.Errorf("vote %d: %v", i, err)
 			}
 		}(i)
@@ -81,7 +81,7 @@ func TestConcurrentSameVoter(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			optionID := p.Options[i%2].ID
-			_, err := s.InsertVote(context.Background(), p.ID, optionID, token)
+			err := s.InsertVote(context.Background(), p.ID, optionID, token)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
