@@ -70,8 +70,15 @@ results whether the vote was fresh or a repeat.
 
 ## Data model
 
-`migrations/0001_init.sql`, embedded and applied at startup (`CREATE TABLE IF NOT EXISTS`, so it's
-idempotent — no separate migration runner or step).
+`migrations/0001_init.sql` and `migrations/0002_option_poll_fk.sql`, embedded and applied at
+startup in filename order. There's no migration-version tracking or separate runner — every file
+just needs to be idempotent and safe to re-run on every startup, which is why `0001` uses `CREATE
+TABLE IF NOT EXISTS` and `0002` (added after `0001` originally shipped without the composite
+foreign key below) guards each `ALTER TABLE` with a `pg_constraint` existence check. That makes
+`0002` apply cleanly both to a brand-new database and to one created by an earlier version of
+`0001` that's still running against a persistent `docker compose` volume — a plain `CREATE TABLE IF
+NOT EXISTS` change to `0001` alone would silently no-op against any database that already existed,
+leaving the invariant below undocumented-but-missing rather than actually enforced.
 
 ```sql
 create table polls (
