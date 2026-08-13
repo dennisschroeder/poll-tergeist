@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -82,12 +83,18 @@ var (
 // ValidateCreate checks a poll's question and option labels ahead of insert.
 // Option count is a create-time input constraint, not a table CHECK — a
 // single row can't see its siblings. See docs/adr for the trade-off.
+//
+// Length limits count Unicode code points (utf8.RuneCountInString), not
+// bytes — len(string) counts UTF-8 bytes, which would reject strings well
+// under the intended limit once they contain multi-byte characters. This
+// matches Postgres's length() on text, which the schema's CHECK constraints
+// also rely on (see migrations/0001_init.sql).
 func ValidateCreate(question string, optionLabels []string) error {
 	q := strings.TrimSpace(question)
 	if q == "" {
 		return ErrBlankQuestion
 	}
-	if len(q) > MaxQuestionLen {
+	if utf8.RuneCountInString(q) > MaxQuestionLen {
 		return ErrQuestionTooLong
 	}
 	if len(optionLabels) < MinOptions || len(optionLabels) > MaxOptions {
@@ -98,7 +105,7 @@ func ValidateCreate(question string, optionLabels []string) error {
 		if label == "" {
 			return ErrBlankOption
 		}
-		if len(label) > MaxLabelLen {
+		if utf8.RuneCountInString(label) > MaxLabelLen {
 			return ErrOptionTooLong
 		}
 	}
