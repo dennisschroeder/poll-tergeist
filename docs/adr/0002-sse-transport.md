@@ -4,10 +4,16 @@
 
 ## Context
 
-This is a *live* poll app — results have to move without a page reload. This decision is just the
-wire protocol between server and browser: how a tally change gets from the server to a viewer
-already looking at the results page. How that change is queued and fanned out — within one process
-and across more than one — is a separate, orthogonal decision; see
+This is a *live* poll app — results have to move without a page reload. The actual requirements the
+transport has to satisfy: communication only ever flows server → browser (a viewer's tab never has
+to send anything back over the same connection); updates are event-driven — a vote lands, or it
+doesn't, there's no continuous stream of data; near-real-time delivery is the goal, not
+sub-second/hard-real-time; and the client side should stay simple, ideally using what the browser
+already provides rather than a hand-rolled reconnect/keepalive protocol.
+
+This decision is just the wire protocol between server and browser: how a tally change gets from
+the server to a viewer already looking at the results page. How that change is queued and fanned
+out — within one process and across more than one — is a separate, orthogonal decision; see
 [ADR 0003](0003-tally-fan-out-and-queue-design.md).
 
 ## Options considered
@@ -28,8 +34,11 @@ and across more than one — is a separate, orthogonal decision; see
 - Simplest possible implementation; genuinely defensible at this scale.
 
 **Con:**
-- Gives back the best chance in the whole exercise to show Go concurrency — a plain `GET` on a
-  timer doesn't touch goroutines, channels, or backpressure at all.
+- Doesn't match "event-driven": a fixed interval is either too slow (a vote waits up to the full
+  interval to show up) or wasteful (most polls return "nothing changed"), and there's no way to
+  pick an interval that's both near-real-time and low-overhead at the same time.
+- Every open results page generates load proportional to how long it's open, not to how many votes
+  actually happen — the opposite of what an event-driven update should cost.
 
 ### Option C — WebSockets
 **Pro:**
@@ -37,7 +46,8 @@ and across more than one — is a separate, orthogonal decision; see
 
 **Con:**
 - A duplex transport for a stream that only ever flows one way here — the client never sends
-  anything over the socket.
+  anything over the socket, and the actual requirement (server → browser, event-driven) doesn't
+  need the capability this buys.
 - Extra dependency, plus upgrade handshake and ping/pong keepalive to implement and maintain, for
   capability this app doesn't use.
 
@@ -53,9 +63,10 @@ and across more than one — is a separate, orthogonal decision; see
 
 Option A: Server-Sent Events, via `net/http`'s `Flusher` and the browser's native `EventSource`.
 
-SSE wins on fit, not novelty: the data only flows one way, so a duplex transport (Option C) buys
-capability nobody uses, and polling (Option B) gives up the concurrency story for no simplicity
-win once SSE is this cheap to write. Option D is the one true strawman here — a live poll app that
+SSE is the simplest protocol that actually matches the communication pattern: one-directional,
+event-driven, near-real-time, server → browser only. A duplex transport (Option C) buys capability
+nobody uses here. Polling (Option B) can't express "push when it happens" — only "ask again later,"
+which is either laggy or wasteful. Option D is the one true strawman here — a live poll app that
 doesn't push live updates has already failed its own name.
 
 ## Consequences
