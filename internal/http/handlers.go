@@ -151,37 +151,20 @@ func (a *api) vote(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		// The vote is already durably committed at this point — invalidate
-		// immediately, before anything else that could fail. A committed
-		// vote must always produce an invalidation; it must never be
-		// skipped because a later, unrelated read (the tally below) failed.
+		// immediately, before anything else. A committed vote must always
+		// produce an invalidation. The command response below only
+		// acknowledges the mutation; it carries no tally of its own —
+		// callers read authoritative state via GET /api/polls/{id} or the
+		// SSE stream, never from this response. A fabricated or
+		// best-effort tally here would risk looking like real state on a
+		// read failure, which is worse than not returning one at all.
 		a.hub.Invalidate(id)
-		writeJSON(w, http.StatusCreated, tallyResponse(a.currentTally(r, id)))
+		writeJSON(w, http.StatusCreated, map[string]string{"status": "recorded"})
 	case errors.Is(err, store.ErrAlreadyVoted):
-		writeJSON(w, http.StatusConflict, withError(tallyResponse(a.currentTally(r, id)), "already voted"))
+		writeError(w, http.StatusConflict, "already voted")
 	case errors.Is(err, store.ErrOptionNotFound):
 		writeError(w, http.StatusBadRequest, "option does not belong to this poll")
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to record vote")
 	}
-}
-
-// currentTally is a best-effort read for the command response body only —
-// independent of both vote persistence and live invalidation (see vote
-// above). A failure here must not change the vote's outcome or status
-// code, so it falls back to an empty tally rather than erroring.
-func (a *api) currentTally(r *http.Request, pollID string) poll.Tally {
-	tally, err := a.store.GetTally(r.Context(), pollID)
-	if err != nil {
-		return poll.Tally{PollID: pollID, Counts: map[int64]int{}}
-	}
-	return tally
-}
-
-func tallyResponse(t poll.Tally) map[string]any {
-	return map[string]any{"tally": tallyJSON(t)}
-}
-
-func withError(m map[string]any, msg string) map[string]any {
-	m["error"] = msg
-	return m
 }

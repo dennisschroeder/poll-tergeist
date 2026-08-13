@@ -207,13 +207,15 @@ func (s *Store) GetTally(ctx context.Context, pollID string) (poll.Tally, error)
 // makes an inconsistent pair impossible at the schema level regardless of
 // which application code performs the insert.
 //
-// Deliberately not returning a tally: a caller that needs one for an HTTP
-// response or a live invalidation must fetch it via GetTally as its own,
-// separate step. That keeps "the vote committed" independent from "a
-// follow-up read succeeded" — a failing follow-up read must never make a
-// durably committed vote look unrecorded to the caller (see
-// docs/adr/0003-tally-fan-out-and-queue-design.md on why a committed vote
-// must always produce an invalidation).
+// Deliberately not returning a tally: the vote command's HTTP response
+// only acknowledges the mutation (201/409), it doesn't carry state — a
+// caller reads current state via GetTally on the query/SSE path instead,
+// as its own separate step. That keeps "the vote committed" independent
+// from "a follow-up read succeeded": a failing follow-up read must never
+// make a durably committed vote look unrecorded to the caller, and a
+// command response must never fabricate tally data it didn't actually
+// read (see docs/adr/0003-tally-fan-out-and-queue-design.md on why a
+// committed vote must always produce an invalidation regardless).
 func (s *Store) InsertVote(ctx context.Context, pollID string, optionID int64, voterToken string) error {
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO votes (poll_id, option_id, voter_token)

@@ -62,7 +62,7 @@ Deliberately *not* in the model: User, Account, Session, poll closing/expiry.
 |---|---|---|
 | `POST` | `/api/polls` | `{question, options[]}` → `201` with the poll and a zero tally. Validates 2–5 options, non-blank labels, question ≤280 chars, labels ≤120 chars. |
 | `GET` | `/api/polls/{id}` | Poll + options + current tally. `404` if unknown. |
-| `POST` | `/api/polls/{id}/votes` | `{option_id}` → `201` with the new tally on a first vote, or `409` with the *current* tally on a repeat vote by the same voter. `400` if the option doesn't belong to this poll. |
+| `POST` | `/api/polls/{id}/votes` | `{option_id}` → `201` on a first vote, `409` on a repeat vote by the same voter. `400` if the option doesn't belong to this poll. Acknowledges the mutation only — no tally in the body; read current state via `GET /api/polls/{id}` or the SSE stream. |
 | `GET` | `/api/polls/{id}/stream` | Server-Sent Events. Sends the current tally immediately, then a refreshed tally after subsequent votes — internally driven by invalidation, so a burst of votes can coalesce into fewer frames than votes; the client always converges to the latest tally regardless. |
 
 Views: `/` (create) → `/p/{id}` (vote) → `/p/{id}/results` (results). Voting redirects to
