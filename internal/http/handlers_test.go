@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -146,5 +147,55 @@ func TestVote_OptionFromAnotherPoll(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestVote_ResponseIsAcknowledgementOnly locks in the command/query split:
+// POST /votes reports the mutation's outcome (201 recorded, 409 already
+// voted) and carries no tally — tally reads live on GET /api/polls/{id}
+// and the SSE stream instead. Uses a cookie jar so the repeat vote below
+// carries the same voter_token as the first, the way a real browser would.
+func TestVote_ResponseIsAcknowledgementOnly(t *testing.T) {
+	srv := newTestServer(t)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookie jar: %v", err)
+	}
+	client := &http.Client{Jar: jar}
+
+	var p struct {
+		ID      string `json:"id"`
+		Options []struct {
+			ID int64 `json:"id"`
+		} `json:"options"`
+	}
+	resp := postJSON(t, client, srv.URL+"/api/polls", map[string]any{
+		"question": "Q?", "options": []string{"A", "B"},
+	})
+	decodeJSON(t, resp, &p)
+	optionID := p.Options[0].ID
+
+	resp = postJSON(t, client, srv.URL+"/api/polls/"+p.ID+"/votes", map[string]any{"option_id": optionID})
+	var first map[string]any
+	decodeJSON(t, resp, &first)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	if _, hasTally := first["tally"]; hasTally {
+		t.Fatalf("201 response contains a tally field, want acknowledgement only: %v", first)
+	}
+
+	resp = postJSON(t, client, srv.URL+"/api/polls/"+p.ID+"/votes", map[string]any{"option_id": optionID})
+	var second map[string]any
+	decodeJSON(t, resp, &second)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	if _, hasTally := second["tally"]; hasTally {
+		t.Fatalf("409 response contains a tally field, want acknowledgement only: %v", second)
+	}
+	if msg, _ := second["error"].(string); msg != "already voted" {
+		t.Fatalf("error = %q, want %q", msg, "already voted")
 	}
 }
