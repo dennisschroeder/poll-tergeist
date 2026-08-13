@@ -85,20 +85,30 @@ func (s *Store) CreatePoll(ctx context.Context, question string, optionLabels []
 	}
 	defer tx.Rollback(ctx)
 
+	// ON CONFLICT DO NOTHING turns a colliding ID into a no-op (RowsAffected
+	// == 0), not a statement error — Postgres aborts a transaction after a
+	// real statement error, so retrying an INSERT that errored inside this
+	// same tx would fail every subsequent statement. This keeps the whole
+	// poll-creation transaction usable across retries.
+	const maxIDAttempts = 4
 	var id string
 	for attempt := 0; ; attempt++ {
 		id, err = poll.NewID()
 		if err != nil {
 			return poll.Poll{}, err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO polls (id, question) VALUES ($1, $2)`, id, question)
-		if err == nil {
+		tag, err := tx.Exec(ctx,
+			`INSERT INTO polls (id, question) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
+			id, question)
+		if err != nil {
+			return poll.Poll{}, fmt.Errorf("store: insert poll: %w", err)
+		}
+		if tag.RowsAffected() == 1 {
 			break
 		}
-		if isUniqueViolation(err) && attempt < 3 {
-			continue
+		if attempt >= maxIDAttempts-1 {
+			return poll.Poll{}, fmt.Errorf("store: insert poll: exhausted %d id collision retries", maxIDAttempts)
 		}
-		return poll.Poll{}, fmt.Errorf("store: insert poll: %w", err)
 	}
 
 	options := make([]poll.Option, len(optionLabels))
@@ -188,11 +198,25 @@ func (s *Store) GetTally(ctx context.Context, pollID string) (poll.Tally, error)
 	return t, nil
 }
 
-// InsertVote records one vote. The first vote per (poll, voter) wins; a
-// repeat attempt returns ErrAlreadyVoted alongside the current tally so the
-// caller can render results either way. option_id -> poll_id consistency is
-// enforced by the WHERE EXISTS guard, in one round trip, no separate lookup.
-func (s *Store) InsertVote(ctx context.Context, pollID string, optionID int64, voterToken string) (poll.Tally, error) {
+// InsertVote records one vote and reports only the persistence outcome —
+// it does not read the tally back. The first vote per (poll, voter) wins;
+// a repeat attempt returns ErrAlreadyVoted. option_id -> poll_id
+// consistency is enforced twice: the WHERE EXISTS guard turns a mismatched
+// option into a clean ErrOptionNotFound in this same round trip, and the
+// composite FOREIGN KEY (poll_id, option_id) on votes (see migrations)
+// makes an inconsistent pair impossible at the schema level regardless of
+// which application code performs the insert.
+//
+// Deliberately not returning a tally: the vote command's HTTP response
+// only acknowledges the mutation (201/409), it doesn't carry state — a
+// caller reads current state via GetTally on the query/SSE path instead,
+// as its own separate step. That keeps "the vote committed" independent
+// from "a follow-up read succeeded": a failing follow-up read must never
+// make a durably committed vote look unrecorded to the caller, and a
+// command response must never fabricate tally data it didn't actually
+// read (see docs/adr/0003-tally-fan-out-and-queue-design.md on why a
+// committed vote must always produce an invalidation regardless).
+func (s *Store) InsertVote(ctx context.Context, pollID string, optionID int64, voterToken string) error {
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO votes (poll_id, option_id, voter_token)
 		SELECT $1, $2, $3
@@ -200,18 +224,14 @@ func (s *Store) InsertVote(ctx context.Context, pollID string, optionID int64, v
 		pollID, optionID, voterToken)
 	if err != nil {
 		if isUniqueViolation(err) {
-			tally, tallyErr := s.GetTally(ctx, pollID)
-			if tallyErr != nil {
-				return poll.Tally{}, tallyErr
-			}
-			return tally, ErrAlreadyVoted
+			return ErrAlreadyVoted
 		}
-		return poll.Tally{}, fmt.Errorf("store: insert vote: %w", err)
+		return fmt.Errorf("store: insert vote: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return poll.Tally{}, ErrOptionNotFound
+		return ErrOptionNotFound
 	}
-	return s.GetTally(ctx, pollID)
+	return nil
 }
 
 func isUniqueViolation(err error) bool {

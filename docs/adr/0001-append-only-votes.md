@@ -39,8 +39,9 @@ what each option costs to defend later.
 
 ### Option C — Both, kept in sync
 **Pro:**
-- The production-grade answer — audit trail from the vote log, fast reads from the counter, both
-  at once.
+- A possible optimization once read throughput actually demands it — audit trail from the vote log,
+  fast reads from the counter, both at once. Not "the production-grade answer" by default: the
+  derived tally in Option A may remain fully valid in production until measurement says otherwise.
 
 **Con:**
 - Pays the complexity of Option A (still need the audit table, still need the dedupe constraint)
@@ -69,7 +70,9 @@ enforcement story is one constraint, not application logic. Makes hard: nothing 
 scale; reads stay a cheap indexed `GROUP BY` on `votes(poll_id)` well past any load this exercise
 will see.
 
-Revisit when a single poll's vote rate makes the `GROUP BY` tally show up as a bottleneck under
-real measurement — not preemptively. At that point, a counter column kept in sync via the same
-transaction that inserts the vote (Option C) is the addition, not a replacement — the vote log
-stays the source of truth.
+**Revisit when:** measured tally-read cost or latency actually requires it — not preemptively, and
+not because a materialized/maintained tally is assumed to be "how production does it." The derived
+tally may remain fully valid in production indefinitely; a counter column kept in sync via the same
+transaction that inserts the vote (Option C) is a possible optimization to introduce once
+measurement demands it, and even then it's an addition, not a replacement — the vote log stays the
+source of truth. Do not implement Option C now.

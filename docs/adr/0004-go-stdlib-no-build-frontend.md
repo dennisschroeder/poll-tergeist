@@ -44,9 +44,12 @@ through in detail.
 
 ### Option D — Go + templ/HTMX (server-rendered)
 **Pro:**
-- The SSE hub forwards opaque bytes regardless of payload, so htmx's SSE extension could subscribe
-  to the same `/stream` endpoint and swap in a rendered fragment per vote — no client-side JS
-  needed to parse a tally and recompute bar widths by hand.
+- The hub itself carries no payload — it only ever signals "this poll changed" (see
+  [ADR 0003](0003-tally-fan-out-and-queue-design.md)); the SSE handler is the sole place that reads
+  Postgres and formats each frame. A htmx-flavored variant would only need to change what that one
+  handler renders on invalidation — a rendered HTML fragment instead of a JSON tally — without
+  touching the hub. No client-side JS would be needed to parse a tally and recompute bar widths by
+  hand.
 - One representation of "what a tally row looks like" instead of three (a Go struct, its JSON
   encoding, and hand-written JS rendering logic) kept in sync, as the current results page does.
 
@@ -78,6 +81,16 @@ no `node_modules`, and no framework-specific context required. Makes hard: showi
 modern component framework — genuinely not demonstrated here, and worth saying plainly rather than
 implying otherwise.
 
-Revisit if the requirements change to explicitly call for frontend-framework depth — that would
-change what the time box is best spent on, and the Option A/B trade-off would need re-arguing from
-scratch, not just re-weighted.
+**This is a prototype-scoped decision, not a permanent one.** It optimizes for a small
+implementation footprint, minimal tooling, low setup cost, and spending the time box on
+architecture rather than frontend framework work — exactly the trade-off a time-boxed prototype
+should make.
+
+**Revisit when a concrete production requirement calls for it** — not preemptively, and not
+because a framework is assumed to be "how production does frontend." Candidate triggers: UI
+complexity that outgrows hand-rolled DOM updates, a need for component reuse across more than a
+handful of views, a team structured around dedicated frontend ownership, accessibility workflows a
+framework's tooling supports better than raw HTML/JS, frontend test tooling, or design-system
+integration. None of those exist yet. At that point the Option A/B trade-off needs re-arguing from
+scratch against the actual requirement, not just re-weighted in the abstract — do not add a
+frontend framework now.

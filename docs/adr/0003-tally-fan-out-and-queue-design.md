@@ -1,97 +1,238 @@
-# ADR 0003 — Tally fan-out and queue design
+# ADR 0003 — Tally fan-out: invalidation signals, not snapshot queueing
 
-**Status:** Accepted · **Date:** 2026-08-12
+**Status:** Accepted · **Date:** 2026-08-12 (revised 2026-08-13)
 
 ## Context
 
-Once a vote changes a tally, it has to reach every open connection watching that poll — including
+Once a vote commits, every open connection watching that poll has to find out — including
 connections on a different process, if there's ever more than one instance. That's two nested
-questions, not one: how a published tally is queued and delivered to a single, possibly-slow
-subscriber, and how a published tally reaches subscribers connected to a different instance
-entirely. They're separate concerns — a poll app can pick any transport (see
-[ADR 0002](0002-sse-transport.md)) with any answer to either question below — but they're argued
-together here because the production-grade answer to the second question also answers the first.
+questions, not one: how a change is delivered to a single, possibly-slow subscriber, and how a
+change reaches subscribers connected to a different instance entirely. They're separate concerns —
+a poll app can pick any transport (see [ADR 0002](0002-sse-transport.md)) with any answer to either
+question below.
+
+The central invariant, unchanged from [ADR 0001](0001-append-only-votes.md): **Postgres is
+authoritative.** Connected clients do not need every intermediate tally — they need to eventually
+converge on the latest committed tally. A client must not require another user to cast a vote in
+order to recover from a missed or coalesced update: if voting stops, every connected client must
+still reach the final state on its own.
+
+### Why the original queued-snapshot design didn't hold
+
+The first version of this hub kept a small buffered channel (size 4) of *serialized tally
+snapshots* per subscriber, and dropped new messages once the channel was full. That's queue
+semantics applied to a problem that isn't a queue: it treats each tally as an event worth keeping
+in order, when only the newest one actually matters.
+
+The failure mode:
+
+```text
+client buffer:
+101, 102, 103, 104
+
+new tallies:
+105 ... 150
+
+if new messages are dropped:
+client eventually reaches 104
+database is at 150
+```
+
+Once the buffer fills, `Publish` drops whichever frames don't fit — but a bounded channel drops
+*new* arrivals, not old ones, so the client drains stale states (101-104) it no longer needs while
+the one state it actually wants (150) was never queued at all. If voting then stops, the client has
+no further trigger to catch up and stays wrong indefinitely. The old design's "self-healing" claim
+only held as long as another vote kept arriving to resend the full state — which is exactly the
+dependency this ADR now rules out.
+
+The key observation: **older snapshots have almost no value once a newer one exists; the newest
+state carries all the value.** A design that preserves old states while discarding the newest one
+has the priority backwards.
 
 ## Options considered
 
-### Option A — In-process hub, bounded per-subscriber channel
+### Option A — In-process hub, per-subscriber invalidation signal
 **Pro:**
-- Zero external dependencies — the whole mechanism is a per-poll `map[chan []byte]struct{}` and a
-  `make(chan []byte, 4)` per subscriber.
-- `Publish` never blocks: a non-blocking send (`select`/`default`) means a slow reader gets dropped
-  frames, not a stalled voter.
+- Zero external dependencies — a per-poll `map[chan struct{}]struct{}` and a `make(chan struct{},
+  1)` per subscriber.
+- `Invalidate` never blocks: a non-blocking send (`select`/`default`) into a 1-slot channel either
+  marks a subscriber dirty or leaves it dirty — there's nothing to drop, because there's no payload
+  to lose.
+- Coalescing is the design, not an accident: five votes in a row collapse to one pending signal,
+  and the subscriber reacts by reading current state once, not by replaying five updates.
+- Whatever a subscriber actually sends to its browser is read fresh from Postgres at the moment
+  it's needed — never a value computed by, and possibly stale relative to, a concurrent request.
 
 **Con:**
-- Per-process only — a subscriber connected to instance A never sees a vote published on instance
-  B.
-- No delivery guarantee beyond the buffer: a subscriber more than 4 frames behind misses updates
-  until it drains, and there's no replay for a reconnecting subscriber.
+- Per-process only — a subscriber connected to instance A never sees an invalidation published on
+  instance B.
+- A reconnecting subscriber gets whatever Postgres currently holds, not a history of what changed
+  while it was away — by design (see Consequences), but worth stating plainly.
 
-### Option B — Postgres `LISTEN/NOTIFY` for cross-instance fan-out
+### Option B — In-process hub, bounded per-subscriber channel of tally snapshots (previous design)
 **Pro:**
-- Closes the multi-instance gap with infrastructure already in use — no new service, just a
-  `LISTEN poll_tally` per instance and a `NOTIFY` after each vote.
+- Self-healing *as long as voting continues*: each frame is a full snapshot, so a client that
+  missed some frames is fully correct the moment the next one arrives.
 
 **Con:**
-- Payload-size ceiling on `NOTIFY` (~8000 bytes) — fine for a tally, but a real constraint.
-- One dedicated listening connection held per instance for the app's lifetime.
-- Doesn't touch per-subscriber delivery — instances still need Option A's (or an unbounded, or a
-  broker's) buffering underneath it for their own local subscribers.
+- Wrong semantics for "converge to latest": a full buffer drops the newest state, not the oldest,
+  so a burst of votes can leave a client stuck several votes behind.
+- No recovery if voting stops — see the failure mode above. The client's correctness became
+  contingent on continued vote traffic it has no control over.
+- Carries a serialized payload per pending message for no benefit a `struct{}` doesn't already
+  provide, since the payload is discarded and re-read from Postgres on delivery anyway once
+  Option A's re-read-on-signal approach is available.
 
-### Option C — Redis pub/sub for cross-instance fan-out
+### Option C — Unbounded per-subscriber queue of snapshots
 **Pro:**
-- Scales past `LISTEN/NOTIFY`'s limits; decouples fan-out from the database entirely.
+- Never drops a message.
 
 **Con:**
-- A new component to run, operate, and reason about.
-- Still fire-and-forget (at-most-once) — doesn't add a delivery guarantee Option A's buffer
-  doesn't already have; it only widens fan-out, not durability.
-
-### Option D — External message broker (NATS or Kafka) for both concerns at once
-**Pro:**
-- The production answer: durable, replayable, at-least-once delivery, and consumer-group
-  backpressure, handled by infrastructure built for exactly this — one piece of infrastructure
-  resolving both cross-instance fan-out and per-subscriber delivery together.
-
-**Con:**
-- A new service to run, operate, and reason about, for a live-update codepath that's currently
-  about 40 lines end to end.
-- Buys guarantees with no consumer here: a missed SSE frame is a few hundred milliseconds of UI
-  staleness until the next vote refreshes it — not a lost fact, since the vote itself is already
-  durable in Postgres ([ADR 0001](0001-append-only-votes.md)). Durability and replay for a value
-  that resends itself in full on every change is insurance against a risk that doesn't exist yet.
+- Unbounded memory against a single stalled client — a memory leak with no compensating benefit,
+  since intermediate states aren't needed anyway (see the central invariant above).
 
 ## Decision
 
-Option A: an in-process hub with a bounded (size 4), drop-on-full channel per subscriber.
+Option A: the hub carries invalidation signals, not tally data. Its message changes from
 
-Each published frame is a full tally snapshot, not a delta, so dropping one is self-healing — the
-next vote anywhere on the poll re-sends the complete current state, and a client that missed two
-frames is fully correct again the moment the next one arrives. That property is what makes "drop
-and don't block" safe here in a way it wouldn't be for a delta or event-sourced stream, and it's
-also why Option D's durability buys nothing yet: nothing is lost that isn't already recoverable by
-construction. An unbounded channel was considered and rejected outright — it trades a bounded,
-self-healing staleness for an unbounded memory leak against a single stalled client, for no
-compensating benefit.
+```text
+"The tally is A=12, B=8"
+```
 
-The per-process limitation is accepted for the same reason the queue design is: nothing in this
-app's current scope runs more than one instance. Options B and C are both real, named answers to
-that specific gap, deliberately not built.
+to
+
+```text
+"Poll X changed; your currently known tally may be stale."
+```
+
+That's an invalidation, not a value. A subscriber holding a pending signal doesn't need a second
+one — both mean exactly the same thing ("go re-read Postgres"), so multiple invalidations coalesce
+safely:
+
+```text
+vote
+vote
+vote
+vote
+vote
+```
+
+can become:
+
+```text
+DIRTY
+```
+
+because the consumer only needs to obtain the newest authoritative state. In code:
+
+```go
+select {
+case ch <- struct{}{}:
+    // subscriber is now marked dirty
+default:
+    // already dirty; nothing else required
+}
+```
+
+This is intentional coalescing, not accidental message loss. The subscriber-side loop (the SSE
+handler, see [ADR 0002](0002-sse-transport.md)) reacts to a signal by calling `store.GetTally`
+again and sending whatever Postgres currently says — always the true current state, never a value
+carried by the invalidation itself.
+
+### Connection-order race
+
+The original SSE handler read the tally, sent it, and only then subscribed:
+
+```text
+1. Read tally
+2. Send initial tally
+3. Subscribe to changes
+```
+
+A vote committing between steps 1 and 3 produces an invalidation nobody is listening for yet — and
+if no *later* vote arrives, that missed vote is gone for good as far as this client is concerned.
+The fix is ordering, not buffering:
+
+```text
+1. Subscribe
+2. Read current tally
+3. Send current tally
+4. On invalidation, read current tally again
+```
+
+Subscribing first means any vote that commits during step 2 still produces a signal the loop will
+see — worst case, one redundant refresh right after the initial send, which is acceptable.
+Correctness here rests on eventual convergence, not on avoiding every possible redundant read.
 
 ## Consequences
 
-Makes easy: the entire fan-out and buffering mechanism stays about 40 lines and is readable in one
-sitting — concurrency, backpressure, and the multi-instance gap are all visible in the same small
-file. Makes hard: running more than one server instance (votes on one instance are invisible to
-viewers connected to another), and recovering from more than 4 missed frames without waiting for
-the next vote.
+Makes easy: reasoning about staleness — a subscriber is either caught up or has exactly one pending
+"go check" signal, never a queue of stale values to reconcile. The mechanism stays about the same
+size as the previous design while being correct under the failure mode that actually matters here:
+voting stopping while a client is behind.
 
-Two independent triggers to revisit, not one:
+Makes hard: the same things as before — running more than one server instance (an invalidation
+published on instance A is invisible to a subscriber on instance B), and there's still no
+replay/history for a client that wants to know *what* changed, only *that* something did. That's
+accepted: nothing this app does needs per-event replay on the live-update path (see
+[ADR 0005](0005-synchronous-vote-persistence.md) for the related, and deliberately separate,
+decision about incoming vote queueing).
 
-- **A second instance is genuinely needed** (load or availability). `LISTEN/NOTIFY` (Option B) is
-  the first step; Redis pub/sub (Option C) is the step after that, when `LISTEN/NOTIFY`'s payload
-  limits or per-instance connection cost themselves become the bottleneck.
-- **Tallies stop being idempotent full snapshots** — per-vote delta events, or an audit/analytics
-  consumer that needs replay. That's the point where the self-healing argument for Option A no
-  longer holds, and a broker (Option D) stops being unused insurance and starts being the correct
-  answer — likely resolving the multi-instance trigger above in the same move.
+### Multi-instance evolution
+
+The likely first step, if a second instance is ever genuinely needed for load or availability:
+
+```text
+vote transaction
+      ↓
+PostgreSQL
+      ↓
+NOTIFY poll_changed
+      ↓
+all application instances
+      ↓
+local invalidation/fan-out
+      ↓
+SSE clients
+```
+
+Postgres `LISTEN/NOTIFY` is the natural first step, not a stopgap: Postgres is already
+authoritative, and a `NOTIFY` payload only ever needs to mean "state changed" — the same
+invalidation-not-data semantics this ADR already settled on, just carried across processes instead
+of staying within one. No new service to run.
+
+One detail that matters for correctness, not just style: the `NOTIFY` must be issued from inside
+the same transaction as the vote insert (or from a trigger on the `votes` table, which runs inside
+that transaction by construction) — not as a separate step after the transaction commits. Postgres
+only delivers a `NOTIFY` if the transaction that issued it actually commits; issuing it
+post-commit, as a second, independent action, reopens exactly the failure mode this ADR exists to
+close — a process crash between "vote committed" and "NOTIFY sent" would silently drop the
+invalidation for every other instance, with no later trigger to recover it. Transactional `NOTIFY`
+gives this evolution path the same "a committed vote always produces an invalidation" guarantee the
+in-process hub already has.
+
+Running multiple instances does not, by itself, mean Redis, Kafka, or NATS becomes required. Each
+of those solves a different problem, justified by a different requirement, not by instance count:
+
+- **Postgres `LISTEN/NOTIFY`** — simple cross-instance invalidation, as long as Postgres remains
+  authoritative and the message stays "something changed." The default next step.
+- **Redis Pub/Sub** — worth considering if `LISTEN/NOTIFY` itself becomes the bottleneck under
+  measurement: notification throughput or DB signaling load, per-instance connection/topology
+  constraints, or an operational requirement to decouple fan-out from Postgres entirely. Not
+  `NOTIFY`'s ~8000-byte payload ceiling — under this ADR's invalidation-not-data model the payload
+  is always just an ID or "something changed," so that limit should never become material here.
+  Still fire-and-forget, at-most-once — Redis widens fan-out; it doesn't add a delivery guarantee
+  `LISTEN/NOTIFY` lacks.
+- **A durable broker** (Kafka, RabbitMQ, NATS JetStream, Google Pub/Sub, …) — justified when
+  individual *events* (not just "something changed") need durable delivery, replay, independent
+  consumers, stronger delivery semantics, analytics/event processing, or decoupling at a larger
+  scale. That's a different problem than live UI invalidation; see
+  [ADR 0005](0005-synchronous-vote-persistence.md) for the distinction between an incoming command
+  queue, a transactional outbox, and live fan-out — three different "queue" problems this project
+  deliberately does not conflate.
+
+One naming precision worth stating explicitly: **core NATS is ephemeral and at-most-once** — the
+same delivery guarantee as Redis Pub/Sub or this ADR's in-process channel; it is not durable by
+itself. **JetStream** is the NATS feature that adds persistence and durable/replayable delivery.
+Describing "NATS or Kafka" as a single generically-durable bucket conflates the two — whichever is
+chosen, it should be chosen for a specific durability/replay requirement, not for the name.

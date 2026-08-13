@@ -1,31 +1,30 @@
-// Package live is the in-process SSE fan-out hub. It is per-process by
-// design — see docs/adr for the multi-instance trade-off.
+// Package live is the in-process invalidation hub for SSE subscribers. It
+// carries no tally data itself — Postgres is the only source of truth for
+// what changed. It is per-process by design — see docs/adr for the
+// multi-instance trade-off.
 package live
 
 import "sync"
 
-// bufSize bounds how many un-consumed frames a slow subscriber can queue
-// before Publish starts dropping frames for it instead of blocking the
-// voter's request.
-const bufSize = 4
-
 type Hub struct {
 	mu   sync.RWMutex
-	subs map[string]map[chan []byte]struct{} // pollID -> subscribers
+	subs map[string]map[chan struct{}]struct{} // pollID -> subscribers
 }
 
 func NewHub() *Hub {
-	return &Hub{subs: make(map[string]map[chan []byte]struct{})}
+	return &Hub{subs: make(map[string]map[chan struct{}]struct{})}
 }
 
-// Subscribe registers a new channel for pollID. Call the returned func to
-// unsubscribe and let the channel be garbage collected.
-func (h *Hub) Subscribe(pollID string) (ch chan []byte, unsubscribe func()) {
-	ch = make(chan []byte, bufSize)
+// Subscribe registers a new invalidation channel for pollID. A receive from
+// the channel means "this poll may now be stale — re-read the tally"; it
+// carries no payload. Call the returned func to unsubscribe and let the
+// channel be garbage collected.
+func (h *Hub) Subscribe(pollID string) (ch chan struct{}, unsubscribe func()) {
+	ch = make(chan struct{}, 1)
 
 	h.mu.Lock()
 	if h.subs[pollID] == nil {
-		h.subs[pollID] = make(map[chan []byte]struct{})
+		h.subs[pollID] = make(map[chan struct{}]struct{})
 	}
 	h.subs[pollID][ch] = struct{}{}
 	h.mu.Unlock()
@@ -41,15 +40,18 @@ func (h *Hub) Subscribe(pollID string) (ch chan []byte, unsubscribe func()) {
 	}
 }
 
-// Publish fans msg out to every subscriber of pollID. A subscriber whose
-// buffer is full is skipped rather than blocked — a slow reader drops
-// frames instead of stalling the vote path that triggered the publish.
-func (h *Hub) Publish(pollID string, msg []byte) {
+// Invalidate marks pollID as changed for every current subscriber. It never
+// blocks: a subscriber already marked dirty (an unconsumed pending signal)
+// is left as-is — one more invalidation adds no information, since the
+// subscriber will re-read the current tally from Postgres regardless of how
+// many votes landed since its last read. This is intentional coalescing,
+// not accidental message loss; see docs/adr/0003-tally-fan-out-and-queue-design.md.
+func (h *Hub) Invalidate(pollID string) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for ch := range h.subs[pollID] {
 		select {
-		case ch <- msg:
+		case ch <- struct{}{}:
 		default:
 		}
 	}

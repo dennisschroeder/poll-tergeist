@@ -147,33 +147,24 @@ func (a *api) vote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	voterToken := voterTokenFrom(r)
-	tally, err := a.store.InsertVote(r.Context(), id, req.OptionID, voterToken)
+	err := a.store.InsertVote(r.Context(), id, req.OptionID, voterToken)
 	switch {
 	case err == nil:
-		a.publishTally(id, tally)
-		writeJSON(w, http.StatusCreated, tallyResponse(tally))
+		// The vote is already durably committed at this point — invalidate
+		// immediately, before anything else. A committed vote must always
+		// produce an invalidation. The command response below only
+		// acknowledges the mutation; it carries no tally of its own —
+		// callers read authoritative state via GET /api/polls/{id} or the
+		// SSE stream, never from this response. A fabricated or
+		// best-effort tally here would risk looking like real state on a
+		// read failure, which is worse than not returning one at all.
+		a.hub.Invalidate(id)
+		writeJSON(w, http.StatusCreated, map[string]string{"status": "recorded"})
 	case errors.Is(err, store.ErrAlreadyVoted):
-		writeJSON(w, http.StatusConflict, withError(tallyResponse(tally), "already voted"))
+		writeError(w, http.StatusConflict, "already voted")
 	case errors.Is(err, store.ErrOptionNotFound):
 		writeError(w, http.StatusBadRequest, "option does not belong to this poll")
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to record vote")
 	}
-}
-
-func tallyResponse(t poll.Tally) map[string]any {
-	return map[string]any{"tally": tallyJSON(t)}
-}
-
-func withError(m map[string]any, msg string) map[string]any {
-	m["error"] = msg
-	return m
-}
-
-func (a *api) publishTally(pollID string, t poll.Tally) {
-	payload, err := json.Marshal(tallyJSON(t))
-	if err != nil {
-		return
-	}
-	a.hub.Publish(pollID, payload)
 }

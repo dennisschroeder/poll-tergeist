@@ -6,10 +6,18 @@ import (
 )
 
 // stream serves Server-Sent Events for one poll: an initial tally frame,
-// then one frame per subsequent vote. Publish is non-blocking on the hub
-// side, so a slow client here never stalls a voter's request elsewhere.
+// then one frame per subsequent invalidation. It subscribes to the hub
+// before reading any state, so a vote committed while the connection is
+// being established is never permanently missed — see
+// docs/adr/0003-tally-fan-out-and-queue-design.md for the ordering
+// rationale. The hub only ever signals "this poll may be stale"; every
+// frame sent here, initial or on invalidation, is read fresh from
+// Postgres.
 func (a *api) stream(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	changes, unsubscribe := a.hub.Subscribe(id)
+	defer unsubscribe()
 
 	_, tally, err := a.loadPollAndTally(r, id)
 	if err != nil {
@@ -33,19 +41,17 @@ func (a *api) stream(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
-	ch, unsubscribe := a.hub.Subscribe(id)
-	defer unsubscribe()
-
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg, ok := <-ch:
-			if !ok {
+		case <-changes:
+			tally, err := a.store.GetTally(ctx, id)
+			if err != nil {
 				return
 			}
-			if _, err := w.Write(append(append([]byte("data: "), msg...), '\n', '\n')); err != nil {
+			if !writeSSEFrame(w, tallyJSON(tally)) {
 				return
 			}
 			flusher.Flush()

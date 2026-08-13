@@ -20,6 +20,15 @@ func TestValidateCreate(t *testing.T) {
 		{"too many options", "Q?", []string{"a", "b", "c", "d", "e", "f"}, ErrOptionCount},
 		{"blank option", "Q?", []string{"a", "   "}, ErrBlankOption},
 		{"oversized option", "Q?", []string{"a", strings.Repeat("x", MaxLabelLen+1)}, ErrOptionTooLong},
+
+		// len(string) counts UTF-8 bytes, not code points — these would
+		// wrongly fail validation against a byte-counting check even
+		// though they're within the code-point limit.
+		{"non-ascii question", "Äpfel oder Bananen?", []string{"Äpfel", "Bananen"}, nil},
+		{"non-ascii question at max length (multi-byte runes)", strings.Repeat("é", MaxQuestionLen), []string{"a", "b"}, nil},
+		{"non-ascii question over max length", strings.Repeat("é", MaxQuestionLen+1), []string{"a", "b"}, ErrQuestionTooLong},
+		{"emoji option at max length", "Q?", []string{strings.Repeat("🙂", MaxLabelLen), "b"}, nil},
+		{"emoji option over max length", "Q?", []string{strings.Repeat("🙂", MaxLabelLen+1), "b"}, ErrOptionTooLong},
 	}
 
 	for _, tt := range tests {
