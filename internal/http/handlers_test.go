@@ -182,8 +182,11 @@ func TestVote_ResponseIsAcknowledgementOnly(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", resp.StatusCode)
 	}
-	if _, hasTally := first["tally"]; hasTally {
-		t.Fatalf("201 response contains a tally field, want acknowledgement only: %v", first)
+	if status, _ := first["status"].(string); status != "recorded" {
+		t.Fatalf("status body = %q, want %q", status, "recorded")
+	}
+	if len(first) != 1 {
+		t.Fatalf("201 response = %v, want only status acknowledgement", first)
 	}
 
 	resp = postJSON(t, client, srv.URL+"/api/polls/"+p.ID+"/votes", map[string]any{"option_id": optionID})
@@ -192,10 +195,10 @@ func TestVote_ResponseIsAcknowledgementOnly(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", resp.StatusCode)
 	}
-	if _, hasTally := second["tally"]; hasTally {
-		t.Fatalf("409 response contains a tally field, want acknowledgement only: %v", second)
-	}
 	if msg, _ := second["error"].(string); msg != "already voted" {
 		t.Fatalf("error = %q, want %q", msg, "already voted")
+	}
+	if len(second) != 1 {
+		t.Fatalf("409 response = %v, want only error acknowledgement", second)
 	}
 }
