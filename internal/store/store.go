@@ -201,7 +201,18 @@ func (s *Store) GetTally(ctx context.Context, pollID string) (poll.Tally, error)
 // InsertVote records one vote. The first vote per (poll, voter) wins; a
 // repeat attempt returns ErrAlreadyVoted alongside the current tally so the
 // caller can render results either way. option_id -> poll_id consistency is
-// enforced by the WHERE EXISTS guard, in one round trip, no separate lookup.
+// enforced twice: the WHERE EXISTS guard turns a mismatched option into a
+// clean ErrOptionNotFound in this same round trip, and the composite
+// FOREIGN KEY (poll_id, option_id) on votes (see migrations) makes an
+// inconsistent pair impossible at the schema level regardless of which
+// application code performs the insert.
+//
+// The returned tally is this command's own read, for the HTTP response
+// only — it is not used for live fan-out. Concurrent InsertVote calls may
+// observe and return tallies in any order; callers must not assume this
+// return value reflects the latest commit relative to other concurrent
+// voters. The SSE path re-reads current state from Postgres independently
+// after an invalidation (see docs/adr/0003-tally-fan-out-and-queue-design.md).
 func (s *Store) InsertVote(ctx context.Context, pollID string, optionID int64, voterToken string) (poll.Tally, error) {
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO votes (poll_id, option_id, voter_token)
