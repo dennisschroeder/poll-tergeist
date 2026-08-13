@@ -107,6 +107,48 @@ func TestConcurrentSameVoter(t *testing.T) {
 	}
 }
 
+// TestCreatePoll_IDCollisionKeepsTransactionUsable proves the ON CONFLICT DO
+// NOTHING insert (see CreatePoll) survives a colliding poll ID without
+// aborting the transaction — a plain INSERT that errors on a unique
+// violation would abort it, and a retry inside the same tx would then fail
+// every subsequent statement with "current transaction is aborted".
+func TestCreatePoll_IDCollisionKeepsTransactionUsable(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	existing := mustCreatePoll(t, s, "Existing poll", []string{"A", "B"})
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO polls (id, question) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
+		existing.ID, "Colliding question")
+	if err != nil {
+		t.Fatalf("colliding insert returned an error instead of a no-op: %v", err)
+	}
+	if tag.RowsAffected() != 0 {
+		t.Fatalf("RowsAffected = %d, want 0 for a colliding id", tag.RowsAffected())
+	}
+
+	// If the collision above had errored (a plain INSERT would), Postgres
+	// aborts the transaction and this next statement fails regardless of
+	// its own validity.
+	newID, err := poll.NewID()
+	if err != nil {
+		t.Fatalf("new id: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO polls (id, question) VALUES ($1, $2)`, newID, "Retry question"); err != nil {
+		t.Fatalf("insert after collision failed — transaction was aborted: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}
+
 func sumTally(t *testing.T, s *Store, pollID string) int {
 	t.Helper()
 	tally, err := s.GetTally(context.Background(), pollID)

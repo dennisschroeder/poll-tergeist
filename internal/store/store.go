@@ -85,20 +85,30 @@ func (s *Store) CreatePoll(ctx context.Context, question string, optionLabels []
 	}
 	defer tx.Rollback(ctx)
 
+	// ON CONFLICT DO NOTHING turns a colliding ID into a no-op (RowsAffected
+	// == 0), not a statement error — Postgres aborts a transaction after a
+	// real statement error, so retrying an INSERT that errored inside this
+	// same tx would fail every subsequent statement. This keeps the whole
+	// poll-creation transaction usable across retries.
+	const maxIDAttempts = 4
 	var id string
 	for attempt := 0; ; attempt++ {
 		id, err = poll.NewID()
 		if err != nil {
 			return poll.Poll{}, err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO polls (id, question) VALUES ($1, $2)`, id, question)
-		if err == nil {
+		tag, err := tx.Exec(ctx,
+			`INSERT INTO polls (id, question) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
+			id, question)
+		if err != nil {
+			return poll.Poll{}, fmt.Errorf("store: insert poll: %w", err)
+		}
+		if tag.RowsAffected() == 1 {
 			break
 		}
-		if isUniqueViolation(err) && attempt < 3 {
-			continue
+		if attempt >= maxIDAttempts-1 {
+			return poll.Poll{}, fmt.Errorf("store: insert poll: exhausted %d id collision retries", maxIDAttempts)
 		}
-		return poll.Poll{}, fmt.Errorf("store: insert poll: %w", err)
 	}
 
 	options := make([]poll.Option, len(optionLabels))
