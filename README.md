@@ -244,8 +244,10 @@ justification:
 1. **Horizontal live fan-out.** Triggered by actually needing a second instance (load or
    availability). Postgres `LISTEN/NOTIFY` is the natural first step — it keeps Postgres
    authoritative and only ever carries "state changed," the same invalidation semantics this
-   prototype already uses within one process. Redis Pub/Sub is the step after that, if
-   `LISTEN/NOTIFY`'s connection cost or payload ceiling becomes the actual bottleneck. See
+   prototype already uses within one process. Redis Pub/Sub is worth considering if
+   `LISTEN/NOTIFY` itself becomes the bottleneck under measurement: notification throughput or DB
+   signaling load, per-instance connection/topology constraints, or an operational requirement to
+   decouple fan-out from Postgres entirely. See
    [`docs/adr/0003-tally-fan-out-and-queue-design.md`](docs/adr/0003-tally-fan-out-and-queue-design.md).
 2. **Incoming load leveling.** Triggered by measured burst traffic exceeding sustainable synchronous
    write capacity, or a downstream outage that shouldn't mean rejecting votes. A database-backed
