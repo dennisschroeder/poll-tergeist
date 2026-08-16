@@ -220,6 +220,17 @@ choice of SSE as the transport itself is a separate decision — see
   for the related frontend-stack reasoning.
 - **No poll closing/expiry, no results-only mode, no edit-after-create.** Out of scope for the
   domain as modeled; see the glossary above.
+- **No rate limiting, no request-size limits, no security headers.** Unauthenticated endpoints are
+  unbounded in both request size and request rate, and responses carry no CSP, frame-ancestors, or
+  referrer policy. The injection classes are closed — SQL is parameterized throughout and all
+  user-controlled text reaches the DOM via `textContent` — so what remains is availability and
+  browser hardening.
+
+The full point-in-time review is in
+[`docs/security-audit-2026-08-16.md`](docs/security-audit-2026-08-16.md): 20 findings rated for a
+hypothetical public deployment, each with location, impact, and a fix sketch, plus a section
+recording what was checked and found sound. Several items there are the security-side reading of
+gaps already listed above — rate limiting, poll expiry, and deployment posture in particular.
 
 ## Production evolution
 
